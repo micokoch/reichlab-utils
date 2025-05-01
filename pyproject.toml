@@ -1,6 +1,6 @@
 [project]
-name = "reichlab-repo-utils"
-description = "Standardize GitHub repository settings"
+name = "reichlab-utils"
+description = "Small utils for internal Reich Lab use"
 license = {text = "MIT License"}
 readme = "README.md"
 requires-python = '>=3.10'
@@ -11,6 +11,8 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
+    "duckdb",
+    "polars",
     "requests",
     "rich",
     "structlog",
@@ -30,6 +32,7 @@ dev = [
 add_default_rulesets = "reichlab_repo_utils.add_repo_rulesets:main"
 archive_repos = "reichlab_repo_utils.archive_repos:main"
 list_repos = "reichlab_repo_utils.list_repos:main"
+hub_stats = "reichlab_repo_utils.get_hub_stats:main"
 
 [build-system]
 # Minimum requirements for the build system to execute.

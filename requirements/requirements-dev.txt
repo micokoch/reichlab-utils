@@ -8,6 +8,8 @@ charset-normalizer==3.3.2
     # via requests
 distlib==0.3.8
     # via virtualenv
+duckdb==1.1.3
+    # via reichlab-repo-utils (pyproject.toml)
 filelock==3.14.0
     # via virtualenv
 identify==2.5.36
@@ -32,6 +34,8 @@ platformdirs==4.2.1
     # via virtualenv
 pluggy==1.5.0
     # via pytest
+polars==1.16.0
+    # via reichlab-repo-utils (pyproject.toml)
 pre-commit==3.7.0
     # via reichlab-repo-utils (pyproject.toml)
 pygments==2.18.0
