@@ -153,6 +153,7 @@ def main(owner: str, repo: str, hub_subdir: str | None, data_dir: str | None) ->
 
 
 def count_rows(file_url) -> tuple[str, int]:
+    """Returns a dataframe with a line count for each file a list."""
     file_path = Path(urlsplit(file_url).path)
     file_name = file_path.name
     file_type = file_path.suffix
@@ -227,6 +228,7 @@ def list_files_in_directory(owner, repo, directory) -> list[str]:
 
 
 def write_csv(output_dir: Path):
+    """Write output of all hub stats .parquet files to .csv."""
     parquet_files = f"{str(output_dir)}/*.parquet"
     try:
         # save detailed hub stats as .csv
