@@ -171,3 +171,4 @@ cython_debug/
 # IDE settings
 .idea/
 .vscode
+.Rproj.user

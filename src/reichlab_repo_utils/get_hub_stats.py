@@ -41,6 +41,12 @@ To use this script:
 `uv run src/reichlab_repo_utils/get_hub_stats.py`
 """
 
+"""Modified Chat GPT aided script
+Get row counts for hub model-output and target-data files.
+
+(unchanged docstring)
+"""
+
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
@@ -81,6 +87,7 @@ try:
     token = os.environ["GITHUB_TOKEN"]
 except KeyError:
     raise ValueError("GITHUB_TOKEN environment variable is required")
+
 session = requests.Session()
 session.headers.update({"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"})
 pl.Config(tbl_rows=500)
@@ -92,18 +99,22 @@ FILE_COUNT = 0
 ###########################################################
 # Actual work starts here                                 #
 ###########################################################
-def main(owner: str, repo: str, data_dir: str | None) -> Path:
+def main(owner: str, repo: str, hub_subdir: str | None, data_dir: str | None) -> Path:
     if data_dir is None:
         output_dir = Path.cwd() / "hub_stats"
     else:
         output_dir = Path(data_dir)
     output_dir.mkdir(exist_ok=True)
-    print(f"Getting stats for [italic green]{owner}/{repo}[/italic green]")
 
+    hub_name = f"{owner}/{repo}" + (f"/{hub_subdir}" if hub_subdir else "")
+    print(f"Getting stats for [italic green]{hub_name}[/italic green]")
 
     repo_line_counts = pl.DataFrame()
+    subdir_prefix = f"{hub_subdir}/" if hub_subdir else ""
+
     for directory in ["model-output", "target-data"]:
-        files = list_files_in_directory(owner, repo, directory)
+        full_dir_path = f"{subdir_prefix}{directory}"
+        files = list_files_in_directory(owner, repo, full_dir_path)
         if len(files) == 0:
             continue
 
@@ -120,7 +131,7 @@ def main(owner: str, repo: str, data_dir: str | None) -> Path:
         if len(count_df) > 0:
             count_df = count_df.with_columns(
                 pl.lit(directory).alias("dir"),
-                pl.lit(f"{owner}/{repo}").alias("repo"),
+                pl.lit(hub_name).alias("repo"),  # MODIFIED
             )
             # extract model_id from file name
             count_df = count_df.with_columns(
@@ -135,14 +146,13 @@ def main(owner: str, repo: str, data_dir: str | None) -> Path:
             )
             repo_line_counts = pl.concat([repo_line_counts, count_df])
 
-    parquet_file = output_dir / f"{repo}.parquet"
+    sanitized_filename = hub_name.replace("/", "_")
+    parquet_file = output_dir / f"{sanitized_filename}.parquet"
     repo_line_counts.write_parquet(parquet_file)
     return parquet_file
 
 
 def count_rows(file_url) -> tuple[str, int]:
-    """Returns a dataframe with a line count for each file a list."""
-
     file_path = Path(urlsplit(file_url).path)
     file_name = file_path.name
     file_type = file_path.suffix
@@ -174,7 +184,6 @@ def count_rows_parquet(file_url: str) -> int:
         else:
             print(f"Unable to access parquet metadata for {file_url}")
             count = 0
-
     return count
 
 
@@ -182,15 +191,12 @@ def count_rows_csv(file_url: str) -> int:
     """Get .csv row count by requesting the file and counting lines."""
     response = session.get(file_url)
     response.raise_for_status()
-    count = len(response.text.splitlines())
-
-    return count
+    return len(response.text.splitlines())
 
 
 def list_files_in_directory(owner, repo, directory) -> list[str]:
     """Use GitHub API to get a list of files in a Hub's directory."""
     url: str | None = f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}"
-
     files = []
 
     while url:
@@ -221,7 +227,6 @@ def list_files_in_directory(owner, repo, directory) -> list[str]:
 
 
 def write_csv(output_dir: Path):
-    """Write output of all hub stats .parquet files to .csv."""
     parquet_files = f"{str(output_dir)}/*.parquet"
     try:
         # save detailed hub stats as .csv
@@ -243,15 +248,12 @@ def write_csv(output_dir: Path):
         # display summarized data on console
         console = Console()
         table = Table(title="Hub Stats Summary")
-
         table.add_column("Repo", justify="left", style="cyan", no_wrap=True)
         table.add_column("Dir", justify="left", style="magenta")
         table.add_column("Row Count", justify="right", style="green")
 
         for row in hub_stats_summary.iter_rows(named=True):
-            formatted_count = f"{row['row_count']:,}"
-            table.add_row(row["repo"], row["dir"], formatted_count)
-
+            table.add_row(row["repo"], row["dir"], f"{row['row_count']:,}")
         console.print(table)
 
     except pl.exceptions.ComputeError:
@@ -264,9 +266,12 @@ if __name__ == "__main__":
         print(f"Limiting file count to {FILE_COUNT} for testing")
     with open(HUB_JSON_PATH, "r") as file:
         hubs = json.load(file)
-    hub_list = hubs.get("hubs")
-    for hub in hub_list:
-        owner = hub["org"]
-        repo = hub["repo"]
-        main(owner, repo, str(data_dir))
+    for hub in hubs.get("hubs"):
+        main(
+            owner=hub["org"],
+            repo=hub["repo"],
+            hub_subdir=hub.get("hub_subdir"),
+            data_dir=str(data_dir)
+        )
     write_csv(data_dir)
+
