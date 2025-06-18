@@ -144,6 +144,9 @@ def main(owner: str, repo: str, hub_subdir: str | None, data_dir: str | None) ->
                     .struct.field("model_id")
                 )
             )
+            count_df = count_df.with_columns(
+                pl.col("file").str.split("/").list.last().alias("file_name")
+            )
             repo_line_counts = pl.concat([repo_line_counts, count_df])
 
     sanitized_filename = hub_name.replace("/", "_")
@@ -151,13 +154,9 @@ def main(owner: str, repo: str, hub_subdir: str | None, data_dir: str | None) ->
     repo_line_counts.write_parquet(parquet_file)
     return parquet_file
 
-
 def count_rows(file_url) -> tuple[str, int]:
     """Returns a dataframe with a line count for each file a list."""
-    file_path = Path(urlsplit(file_url).path)
-    file_name = file_path.name
-    file_type = file_path.suffix
-
+    file_type = Path(urlsplit(file_url).path).suffix
     try:
         if file_type == ".csv":
             count = count_rows_csv(file_url)
@@ -167,10 +166,7 @@ def count_rows(file_url) -> tuple[str, int]:
         print(f"Error processing {file_url}")
         print(e)
         count = 0
-    finally:
-        line_counts = (file_name, count)
-
-    return line_counts
+    return (file_url, count)  # <-- Use full URL, not just file name
 
 
 def count_rows_parquet(file_url: str) -> int:
@@ -187,13 +183,24 @@ def count_rows_parquet(file_url: str) -> int:
             count = 0
     return count
 
+import csv
+from io import StringIO
 
 def count_rows_csv(file_url: str) -> int:
-    """Get .csv row count by requesting the file and counting lines."""
+    """Stream CSV and count only data rows (exclude header)."""
     response = session.get(file_url)
     response.raise_for_status()
-    return len(response.text.splitlines())
+    f = StringIO(response.text)
+    reader = csv.reader(f)
 
+    # Skip header
+    try:
+        next(reader)
+    except StopIteration:
+        return 0  # empty file
+
+    # Count remaining rows
+    return sum(1 for _ in reader)
 
 def list_files_in_directory(owner, repo, directory) -> list[str]:
     """Use GitHub API to get a list of files in a Hub's directory."""
@@ -210,7 +217,7 @@ def list_files_in_directory(owner, repo, directory) -> list[str]:
         data = response.json()
 
         for item in data:
-            if item["type"] == "file" and item["download_url"].endswith((".csv", ".parquet")):
+            if item["type"] == "file" and item["download_url"].lower().endswith((".csv", ".parquet")):
                 files.append(item["download_url"])
             elif item["type"] == "dir":
                 files.extend(list_files_in_directory(owner, repo, item["path"]))
@@ -237,12 +244,13 @@ def write_csv(output_dir: Path):
         hub_stats.write_csv(csv_file)
 
         # save a summarized version of hub stats
-        hub_stats_summary = hub_stats.sql("""
-            SELECT repo, dir, SUM(row_count) as row_count
-            FROM self
-            GROUP BY repo, dir
-            ORDER BY repo, dir
-        """)
+        hub_stats_summary = hub_stats.select(["repo", "dir", "row_count"]).group_by("repo", "dir").sum()
+        # hub_stats_summary = hub_stats.sql("""
+        #     SELECT repo, dir, SUM(row_count) as row_count
+        #     FROM self
+        #     GROUP BY repo, dir
+        #     ORDER BY repo, dir
+        # """)
         summary_csv_file = output_dir / "hub_stats_summary.csv"
         hub_stats_summary.write_csv(summary_csv_file)
         print(f"Saved hub summaries: {summary_csv_file}")
