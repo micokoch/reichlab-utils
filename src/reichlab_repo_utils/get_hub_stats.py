@@ -41,12 +41,6 @@ To use this script:
 `uv run src/reichlab_repo_utils/get_hub_stats.py`
 """
 
-"""Modified Chat GPT aided script
-Get row counts for hub model-output and target-data files.
-
-(unchanged docstring)
-"""
-
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
@@ -58,12 +52,14 @@ Get row counts for hub model-output and target-data files.
 # ///
 
 import concurrent.futures
+import csv
 import importlib.util
 import json
 import os
 from collections import defaultdict
+from io import StringIO
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import duckdb
 import polars as pl
@@ -90,6 +86,10 @@ except KeyError:
 
 session = requests.Session()
 session.headers.update({"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"})
+
+# Install httpfs extension once at startup so count_rows_parquet doesn't repeat it per call
+with duckdb.connect() as _con:
+    _con.sql("INSTALL httpfs;")
 pl.Config(tbl_rows=500)
 pl.Config.set_fmt_str_lengths(100)
 # For testing, limit number of files to process. Set to 0 for no limit
@@ -136,13 +136,8 @@ def main(owner: str, repo: str, hub_subdir: str | None, data_dir: str | None) ->
             # extract model_id from file name
             count_df = count_df.with_columns(
                 pl.when(pl.col("dir") == "model-output").then(
-                    pl.col("file")
-                    .str.slice(11)
-                    .str.strip_chars_start("_-")
-                    .str.splitn(".", 2)
-                    .struct.rename_fields(["model_id", "file_type"])
-                    .struct.field("model_id")
-                )
+                    pl.col("file").str.extract(r"model-output/([^/]+)/", 1)
+                ).alias("model_id")
             )
             count_df = count_df.with_columns(
                 pl.col("file").str.split("/").list.last().alias("file_name")
@@ -174,17 +169,14 @@ def count_rows_parquet(file_url: str) -> int:
     # duckdb is a handy way to access parquet file metadata
     # (we're not using it to store any output data)
     with duckdb.connect() as con:
-        con.sql("INSTALL httpfs;")
-        sql = f"SELECT num_rows FROM parquet_file_metadata('{file_url}');"
+        con.sql("LOAD httpfs;")
+        sql = f"SELECT SUM(num_rows) FROM parquet_file_metadata('{file_url}');"
         if (query_result := con.sql(sql).fetchone()) is not None:
             count = query_result[0]
         else:
             print(f"Unable to access parquet metadata for {file_url}")
             count = 0
     return count
-
-import csv
-from io import StringIO
 
 def count_rows_csv(file_url: str) -> int:
     """Stream CSV and count only data rows (exclude header)."""
@@ -204,7 +196,7 @@ def count_rows_csv(file_url: str) -> int:
 
 def list_files_in_directory(owner, repo, directory) -> list[str]:
     """Use GitHub API to get a list of files in a Hub's directory."""
-    url: str | None = f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}"
+    url: str | None = f"https://api.github.com/repos/{owner}/{repo}/contents/{quote(directory)}"
     files = []
 
     while url:
@@ -212,6 +204,10 @@ def list_files_in_directory(owner, repo, directory) -> list[str]:
         # some hubs don't have a target-data directory, so 404 is a-ok
         if response.status_code == 404:
             print(f"[yellow]URL {url} not found[/yellow]")
+            break
+        # GitHub returns 403 when a directory exceeds 1,000 items (Contents API limit)
+        if response.status_code == 403:
+            print(f"[yellow]URL {url} returned 403 (access denied or directory too large — skipping)[/yellow]")
             break
         response.raise_for_status()
         data = response.json()
@@ -239,12 +235,21 @@ def write_csv(output_dir: Path):
     parquet_files = f"{str(output_dir)}/*.parquet"
     try:
         # save detailed hub stats as .csv
-        hub_stats = pl.read_parquet(parquet_files)
+        hub_stats = (
+            pl.scan_parquet(parquet_files, missing_columns="insert")
+            .collect()
+            .sort(by=[pl.col("repo").str.to_lowercase(), pl.col("dir")])
+        )
         csv_file = output_dir / "hub_stats.csv"
         hub_stats.write_csv(csv_file)
 
         # save a summarized version of hub stats
-        hub_stats_summary = hub_stats.select(["repo", "dir", "row_count"]).group_by("repo", "dir").sum()
+        hub_stats_summary = (
+            hub_stats.select(["repo", "dir", "row_count"])
+            .group_by("repo", "dir")
+            .sum()
+            .sort(by=[pl.col("repo").str.to_lowercase(), pl.col("dir")])
+        )
         # hub_stats_summary = hub_stats.sql("""
         #     SELECT repo, dir, SUM(row_count) as row_count
         #     FROM self
